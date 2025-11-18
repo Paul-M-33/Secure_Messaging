@@ -1,0 +1,253 @@
+import tkinter as tk
+from tkinter import scrolledtext
+import base64
+import datetime
+import threading
+import json
+import asyncio
+import websockets
+from cipher import generate_keys, encrypt_message, decrypt_message
+
+SERVER_URI = "ws://localhost:8765"  # relay server
+
+
+class ChatWindow:
+    """
+    GUI chat window for a single user with encrypted messaging.
+
+    Attributes:
+        master (tk.Tk): The main Tkinter window.
+        username (str): The username of the client.
+        chat_display (ScrolledText): Widget displaying chat messages.
+        entry (tk.Entry): Widget to input messages.
+        send_button (tk.Button): Button to send messages.
+        peers (list[str]): List of usernames of connected peers.
+        selected_peer (tk.StringVar): Selected peer for sending messages.
+        peer_dropdown (tk.OptionMenu): Dropdown menu of peers.
+        ws (websockets.WebSocketClientProtocol): WebSocket connection.
+        loop (asyncio.AbstractEventLoop): Event loop for async tasks.
+        priv_key, pub_key: User's asymmetric key pair.
+        peer_pubkeys (dict): Mapping peer username → public key.
+        incoming_msgs (list[tuple[str, str]]): Queue of received messages.
+    """
+    def __init__(self, master, username):
+        """
+        Initialize the chat window GUI and network/crypto setup.
+
+        Args:
+            master (tk.Tk): Tkinter root window.
+            username (str): Username of this client.
+        """
+        self.master = master
+        self.master.title(f"Chat - {username}")
+        self.username = username
+
+        # --- CHAT DISPLAY ---
+        self.chat_display = scrolledtext.ScrolledText(master, width=60, height=20, state="disabled")
+        self.chat_display.pack(padx=10, pady=10)
+
+        # colors
+        self.chat_display.tag_config("timestamp", foreground="dim gray")
+        self.chat_display.tag_config("incoming", foreground="black")
+        self.chat_display.tag_config("outgoing", foreground="black")
+
+        # --- MESSAGE ENTRY ---
+        entry_frame = tk.Frame(master)
+        entry_frame.pack(pady=5)
+
+        self.entry = tk.Entry(entry_frame, width=40)
+        self.entry.pack(side=tk.LEFT, padx=(10, 5))
+
+        self.send_button = tk.Button(entry_frame, text="Send", command=self.send_message)
+        self.send_button.pack(side=tk.LEFT)
+
+        # --- PEER SELECTION (DROPDOWN) ---
+        self.peers = []   # list of names
+        self.selected_peer = tk.StringVar(master)
+        self.selected_peer.set("No peers yet")
+
+        peer_frame = tk.Frame(master)
+        peer_frame.pack(pady=5)
+
+        tk.Label(peer_frame, text="Send to:").pack(side=tk.LEFT, padx=5)
+        self.peer_dropdown = tk.OptionMenu(peer_frame, self.selected_peer, [])
+        self.peer_dropdown.pack(side=tk.LEFT, padx=5)
+
+        # --- NETWORK VARIABLES ---
+        self.ws = None
+        self.loop = asyncio.new_event_loop()
+
+        # --- CRYPTO ---
+        self.priv_key, self.pub_key = generate_keys()
+        self.peer_pubkeys = {}
+
+        # Start WebSocket in background thread
+        threading.Thread(target=self.run_websocket_loop, daemon=True).start()
+
+        # Periodically check incoming messages
+        self.master.after(100, self.process_incoming)
+        self.incoming_msgs = []
+
+    # --- GUI HELPERS ---
+
+    def display_message(self, sender, text, timestamp):
+        """
+        Display a message in the chat display with subtle colors for clarity.
+
+        Args:
+            sender (str): Name of the message sender.
+            text (str): Message content.
+            timestamp (datetime): Timestamp of the message.
+        """
+
+        self.chat_display.config(state="normal")
+
+        if timestamp:
+            time_str = timestamp.strftime("%H:%M:%S")
+            formatted = f"[{time_str}] {sender}: {text}\n"
+            self.chat_display.insert(tk.END, f"[{time_str}] ", "timestamp")
+            tag = "outgoing" if sender.startswith(self.username) else "incoming"
+            self.chat_display.insert(tk.END, f"{sender}: {text}\n", tag)
+        else:
+            # No timestamp → simple message
+            formatted = f"{sender}: {text}\n"
+            tag = "outgoing" if sender.startswith(self.username) else "incoming"
+            self.chat_display.insert(tk.END, formatted, tag)
+
+        self.chat_display.config(state="disabled")
+        self.chat_display.yview(tk.END)
+
+    def update_peer_dropdown(self):
+        """
+        Update the dropdown menu of peers based on the current peer list.
+        """
+        menu = self.peer_dropdown["menu"]
+        menu.delete(0, "end")
+        for peer in self.peers:
+            menu.add_command(label=peer, command=lambda p=peer: self.selected_peer.set(p))
+        if self.peers:
+            self.selected_peer.set(self.peers[0])
+        else:
+            self.selected_peer.set("No peers yet")
+
+    # --- SEND MESSAGE ---
+
+    def send_message(self):
+        """
+        Encrypt and send a message to the selected peer.
+
+        Raises:
+            Displays a SYSTEM message if:
+                - No text is entered
+                - No recipient is selected
+                - No public key exists for the recipient
+        """
+        text = self.entry.get().strip()
+        to = self.selected_peer.get()
+        if not text or to == "No peers yet":
+            self.display_message("SYSTEM", "No recipient available.")
+            return
+
+        # Cipher message with recipient's public key
+        if to not in self.peer_pubkeys:
+            self.display_message("SYSTEM", f"No public key for {to}")
+            return
+
+        encrypted_payload = encrypt_message(text, self.peer_pubkeys[to])
+        encrypted_payload_b64 = base64.b64encode(encrypted_payload).decode()  # convert to string
+
+        msg = {
+            "type": "send",
+            "from": self.username,
+            "to": to,
+            "payload": encrypted_payload_b64
+        }
+        asyncio.run_coroutine_threadsafe(self.ws.send(json.dumps(msg)), self.loop)
+        self.display_message(f"{self.username} (to {to})", text, timestamp=datetime.datetime.now())
+        self.entry.delete(0, tk.END)
+
+    # --- RECEIVE ---
+
+    def process_incoming(self):
+        """
+        Process all messages in the incoming queue and display them.
+
+        Decrypts each message using the user's private key and appends it to the chat display.
+        Runs periodically using Tkinter's after method.
+        """
+        while self.incoming_msgs:
+            sender, text, timestamp = self.incoming_msgs.pop(0)
+            self.display_message(sender, text, timestamp)
+        self.master.after(100, self.process_incoming)
+
+    # --- WEBSOCKET BACKGROUND TASKS ---
+
+    async def websocket_main(self):
+        """
+        Main asynchronous WebSocket routine.
+
+        - Connects to the server
+        - Registers the username and public key
+        - Requests the initial peer list
+        - Receives updates and forwarded messages
+        - Decrypts incoming messages before queuing them for display
+        """
+        async with websockets.connect(SERVER_URI) as ws:
+            self.ws = ws
+            await ws.send(json.dumps({"type": "register", "name": self.username, "pub_key": self.pub_key}))
+            await ws.send(json.dumps({"type": "get_peers"}))
+
+            async for raw in ws:
+                data = json.loads(raw)
+                t = data.get("type")
+
+                if t == "peers":
+                    self.peers = [p for p in data["peers"] if p != self.username]
+                    self.peer_pubkeys = data.get("pubkeys", {})
+                    self.master.after(0, self.update_peer_dropdown)
+
+                elif t == "forward":
+                    sender = data["from"]
+                    payload = data["payload"]
+
+                    # Decipher the message
+                    payload_bytes = base64.b64decode(payload)
+                    try:
+                        timestamp, decrypted = decrypt_message(payload_bytes, self.priv_key)
+                    except Exception:
+                        decrypted = "<Could not decrypt>"
+
+                    self.incoming_msgs.append((sender, decrypted, timestamp))
+
+    def run_websocket_loop(self):
+        """
+        Run the asyncio event loop for WebSocket communication in a separate thread.
+        """
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.websocket_main())
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Login")
+
+    tk.Label(root, text="Enter username:").pack(padx=10, pady=10)
+
+    username_entry = tk.Entry(root, width=35)
+    username_entry.pack(padx=10, pady=5)
+
+    def start_chat():
+        """
+        Callback for the login button. Starts the chat window for the entered username.
+        """
+        name = username_entry.get().strip()
+        if not name:
+            return
+        root.destroy()  # close login window
+        chat_root = tk.Tk()
+        ChatWindow(chat_root, name)
+        chat_root.mainloop()
+
+    tk.Button(root, text="Connect", command=start_chat).pack(pady=10)
+
+    root.mainloop()
