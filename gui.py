@@ -6,7 +6,8 @@ import threading
 import json
 import asyncio
 import websockets
-from cipher import generate_keys, encrypt_message, decrypt_message
+import cipher as c
+
 
 SERVER_URI = "ws://localhost:8765"  # relay server
 
@@ -57,6 +58,7 @@ class ChatWindow:
 
         self.entry = tk.Entry(entry_frame, width=40)
         self.entry.pack(side=tk.LEFT, padx=(10, 5))
+        self.entry.bind("<Return>", lambda event: self.send_message())
 
         self.send_button = tk.Button(entry_frame, text="Send", command=self.send_message)
         self.send_button.pack(side=tk.LEFT)
@@ -78,8 +80,10 @@ class ChatWindow:
         self.loop = asyncio.new_event_loop()
 
         # --- CRYPTO ---
-        self.priv_key, self.pub_key = generate_keys()
+        self.priv_key, self.pub_key = c.generate_rsa_keys()
         self.peer_pubkeys = {}
+        # AES key per peer
+        self.sym_keys = {}
 
         # Start WebSocket in background thread
         threading.Thread(target=self.run_websocket_loop, daemon=True).start()
@@ -145,16 +149,41 @@ class ChatWindow:
         text = self.entry.get().strip()
         to = self.selected_peer.get()
         if not text or to == "No peers yet":
-            self.display_message("SYSTEM", "No recipient available.")
+            self.display_message("SYSTEM", "No recipient available.", None)
             return
 
-        # Cipher message with recipient's public key
+        # Ensure we know recipient's public key (we need it to send AES key)
         if to not in self.peer_pubkeys:
-            self.display_message("SYSTEM", f"No public key for {to}")
+            self.display_message("SYSTEM", f"No public key for {to}", None)
             return
 
-        encrypted_payload = encrypt_message(text, self.peer_pubkeys[to])
-        encrypted_payload_b64 = base64.b64encode(encrypted_payload).decode()  # convert to string
+        # If no symmetric key yet, create one and send it encrypted with recipient RSA pubkey
+        if to not in self.sym_keys:
+            aes_key = c.generate_symmetric_key()          # bytes
+            self.sym_keys[to] = aes_key
+
+            # base64-encode AES key so we send ASCII content in JSON
+            aes_key_b64 = base64.b64encode(aes_key)    # bytes
+            # if your RSA helper expects bytes -> pass bytes; if it expects str encode appropriately
+            encrypted_key = c.encrypt_rsa_message(aes_key_b64, self.peer_pubkeys[to])
+            # encrypted_key assumed bytes; base64 encode to send as JSON string
+            awaitable = self.ws.send(json.dumps({
+                "type": "aes_key",
+                "from": self.username,
+                "to": to,
+                "payload": base64.b64encode(encrypted_key).decode()
+            }))
+            asyncio.run_coroutine_threadsafe(awaitable, self.loop)
+
+        # Now encrypt the message with AES and send
+        aes_key_for_peer = self.sym_keys.get(to)
+        if aes_key_for_peer is None:
+            # Shouldn't happen because we created it above, but guard anyway
+            self.display_message("SYSTEM", f"No AES key for {to}", None)
+            return
+
+        encrypted_payload = c.encrypt_symmetric_message(text, aes_key_for_peer)  # bytes
+        encrypted_payload_b64 = base64.b64encode(encrypted_payload).decode()
 
         msg = {
             "type": "send",
@@ -163,6 +192,7 @@ class ChatWindow:
             "payload": encrypted_payload_b64
         }
         asyncio.run_coroutine_threadsafe(self.ws.send(json.dumps(msg)), self.loop)
+        # display with local timestamp
         self.display_message(f"{self.username} (to {to})", text, timestamp=datetime.datetime.now())
         self.entry.delete(0, tk.END)
 
@@ -213,11 +243,26 @@ class ChatWindow:
                     # Decipher the message
                     payload_bytes = base64.b64decode(payload)
                     try:
-                        timestamp, decrypted = decrypt_message(payload_bytes, self.priv_key)
+                        timestamp, decrypted = c.decrypt_symmetric_message(payload_bytes, self.sym_keys[sender])
                     except Exception:
                         decrypted = "<Could not decrypt>"
+                        timestamp = None
 
                     self.incoming_msgs.append((sender, decrypted, timestamp))
+                
+                elif t == "aes_key":
+                    sender = data["from"]
+                    encrypted_key_b64 = data["payload"]
+                    encrypted_key = base64.b64decode(encrypted_key_b64)
+
+                    # decrypt RSA → get base64 AES
+                    aes_key_b64 = c.decrypt_rsa_message(encrypted_key, self.priv_key)
+
+                    # convert base64 → bytes
+                    aes_key = base64.b64decode(aes_key_b64)
+
+                    # store AES key
+                    self.sym_keys[sender] = aes_key
 
     def run_websocket_loop(self):
         """

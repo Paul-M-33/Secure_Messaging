@@ -60,6 +60,24 @@ async def handler(ws):
                 else:
                     await ws.send(json.dumps({"type": "error", "message": f"{to} not online"}))
 
+            elif t == "aes_key":
+                # forward same structure to receiver
+                sender = msg["from"]
+                to = msg["to"]
+                encrypted_key = msg["payload"]
+
+                print(f"[AES_KEY_CIPHERED] {sender} → {to}: {encrypted_key}")
+
+                # Build the forwarded packet
+                out = {
+                    "type": "aes_key",
+                    "from": sender,
+                    "to": to,
+                    "payload": encrypted_key
+                }
+
+                await clients[to]["ws"].send(json.dumps(out))
+
     except websockets.ConnectionClosed:
         pass
 
