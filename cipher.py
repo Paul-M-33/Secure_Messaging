@@ -1,6 +1,15 @@
 # --- CRYPTO HELPERS ---
 
-from cryptidy import asymmetric_encryption, symmetric_encryption
+import base64
+from Cryptodome.PublicKey import RSA
+from Cryptodome.Cipher import PKCS1_OAEP, AES
+from Cryptodome.Random import get_random_bytes
+from Crypto.Signature import pkcs1_15
+from Crypto.Hash import SHA256
+
+# ============================================================
+# RSA KEY GENERATION
+# ============================================================
 
 
 def generate_rsa_keys():
@@ -10,55 +19,66 @@ def generate_rsa_keys():
     Uses a 2048-bit key size for secure asymmetric encryption.
 
     Returns:
-        tuple: (priv_key, pub_key)
-            - priv_key: The private key object used for decryption.
-            - pub_key: The public key object used for encryption.
+        tuple: (private_key_pem, public_key_pem)
+            - private_key_pem: The private key object used for decryption.
+            - public_key_pem: The public key object used for encryption.
 
     Example:
         priv, pub = generate_keys()
     """
-    priv_key, pub_key = asymmetric_encryption.generate_keys(2048)
-    return priv_key, pub_key
+    key = RSA.generate(2048)
+    private_key_pem = key.export_key().decode()
+    public_key_pem = key.publickey().export_key().decode()
+    return private_key_pem, public_key_pem
+
+# ============================================================
+# RSA ENCRYPT / DECRYPT
+# ============================================================
 
 
-def encrypt_rsa_message(message, pub_key):
+def encrypt_rsa_message(message: str, public_key_pem: str) -> bytes:
     """
     Encrypt a message using the recipient's public key.
 
     Parameters:
         message (str): The plaintext message to encrypt.
-        pub_key: The recipient's public key object.
+        public_key_pem (str): The recipient's public key object.
 
     Returns:
-        str: The encrypted message as a string, ready for transmission.
+        bytes: The encrypted message.
 
     Example:
         encrypted = encrypt_message("Hello", recipient_pub_key)
     """
-    encrypted_message = asymmetric_encryption.encrypt_message(message, pub_key)
-    return encrypted_message
+    message = message.encode()
+    pubkey = RSA.import_key(public_key_pem)
+    cipher = PKCS1_OAEP.new(pubkey)
+    encrypted = cipher.encrypt(message)
+    return encrypted
 
 
-def decrypt_rsa_message(encrypted_message, priv_key):
+def decrypt_rsa_message(ciphertext: bytes, private_key_pem: str) -> bytes:
     """
     Decrypt an encrypted message using the recipient's private key.
 
     Parameters:
-        encrypted_message (str): The encrypted message received.
-        priv_key: The recipient's private key object.
+        ciphertext (bytes): The encrypted message received.
+        priv_key_pem (str): The recipient's private key object.
 
     Returns:
-        str: The original plaintext message.
-
-    Notes:
-        - The underlying cryptidy library may include a timestamp in the message;
-          this function returns only the original message.
+        bytes: The original plaintext message.
 
     Example:
         original = decrypt_message(encrypted, my_priv_key)
     """
-    timestamp, original_message = asymmetric_encryption.decrypt_message(encrypted_message, priv_key)
-    return original_message
+    prikey = RSA.import_key(private_key_pem)
+    cipher = PKCS1_OAEP.new(prikey)
+    decrypted = cipher.decrypt(ciphertext)
+    return decrypted.decode()
+
+# ============================================================
+# AES SYMMETRIC KEY GENERATION
+# ============================================================
 
 
 def generate_symmetric_key():
@@ -68,40 +88,119 @@ def generate_symmetric_key():
     Uses a 256-bit key size for secure symmetric encryption.
 
     Returns:
-        key: The symmetric key object used for encryption.
+        key (bytes): The symmetric key object used for encryption.
     """
-    key = symmetric_encryption.generate_key(32)
-    return key
+    return get_random_bytes(32)  # AES-256
+
+# ============================================================
+# AES ENCRYPT / DECRYPT
+# ============================================================
 
 
-def encrypt_symmetric_message(message, key):
+def encrypt_symmetric_message(message: str, key: bytes) -> bytes:
     """
     Encrypt a message using the AES key.
 
     Parameters:
         message (str): The plaintext message to encrypt.
-        key: The private key object.
+        key (bytes): The private key object.
 
     Returns:
-        str: The encrypted message as a string, ready for transmission.
+        bytes: The encrypted message.
 
     Example:
         encrypted = encrypt_message("Hello", key)
     """
-    encrypted = symmetric_encryption.encrypt_message(message, key)
-    return encrypted
+    cipher = AES.new(key, AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(message.encode())
+
+    data = cipher.nonce + tag + ciphertext
+    return base64.b64encode(data)
 
 
-def decrypt_symmetric_message(encrypted, key):
+def decrypt_symmetric_message(ciphertext_b64: str, key: bytes) -> str:
     """
     Decrypt an encrypted message using the AES private key.
 
     Parameters:
-        encrypted_message (str): The encrypted message received.
-        key: The key object used to cipher the message.
+        ciphertext_b64 (str): The encrypted message received.
+        key (bytes): The key object used to cipher the message.
 
     Returns:
         str: The original plaintext message.
     """
-    timestamp, original_message = symmetric_encryption.decrypt_message(encrypted, key)
-    return timestamp, original_message
+    raw = base64.b64decode(ciphertext_b64)
+
+    nonce = raw[:16]
+    tag = raw[16:32]
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+
+    plaintext = cipher.decrypt_and_verify(raw[32:], tag)
+    return plaintext.decode()
+
+# ============================================================
+# RSA SIGNATURES
+# ============================================================
+
+
+def sign_message(message: str, private_key_pem: str) -> str:
+    """
+    Sign a message using the private key.
+
+    Parameters:
+        message (str): The message to sign.
+        private_key_pem (str): The private key object.
+
+    Returns:
+        str: The signature of the message.
+    """
+    message = message.encode()
+    priv = RSA.import_key(private_key_pem)
+    h = SHA256.new(message)
+    signature = pkcs1_15.new(priv).sign(h)
+    return signature
+
+
+def verify_signature(message: str, signature: str, public_key_pem: str) -> bool:
+    """
+    Verify the signature of a message using the public key.
+
+    Parameters:
+        message (str): The message to verify.
+        signature (str): The signature of the message.
+        public_key_pem (str): The public key object.
+
+    Returns:
+        bool: True if the signature is valid, raises an exception otherwise.
+    """
+    message = message.encode()
+    key = RSA.import_key(public_key_pem)
+    h = SHA256.new(message)
+
+    try:
+        pkcs1_15.new(key).verify(h, signature)
+        return True
+
+    except (ValueError, TypeError):
+        print("The signature is not valid.")
+
+# ============================================================
+# SELF-TEST
+# ============================================================
+
+if __name__ == "__main__":
+    priv, pub = generate_rsa_keys()
+
+    # Test RSA
+    msg = "hello world"
+    encrypted = encrypt_rsa_message(msg, pub)
+    print("RSA OK:", decrypt_rsa_message(encrypted, priv) == msg)
+
+    # Test AES
+    key = generate_symmetric_key()
+    encrypted2 = encrypt_symmetric_message(msg, key)
+    print("AES OK:", decrypt_symmetric_message(encrypted2, key) == msg)
+
+    # Test signature
+    sig = sign_message(msg, priv)
+    print("Signature OK:", verify_signature(msg, sig, pub))

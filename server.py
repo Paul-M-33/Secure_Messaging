@@ -55,6 +55,10 @@ async def handler(ws):
                         "from": sender,
                         "payload": payload,
                     }
+
+                    if "signature" in msg:
+                        out["signature"] = msg["signature"]
+
                     await clients[to]["ws"].send(json.dumps(out))
                     print(f"[FORWARD] {sender} → {to}: {payload}")
                 else:

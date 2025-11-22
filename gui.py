@@ -47,10 +47,36 @@ class ChatWindow:
         self.chat_display = scrolledtext.ScrolledText(master, width=60, height=20, state="disabled")
         self.chat_display.pack(padx=10, pady=10)
 
-        # colors
-        self.chat_display.tag_config("timestamp", foreground="dim gray")
-        self.chat_display.tag_config("incoming", foreground="black")
-        self.chat_display.tag_config("outgoing", foreground="black")
+        # --- BUBBLE STYLES ---
+
+        self.chat_display.tag_config("bubble_in", 
+                                     background="#E6E6E6", foreground="black",
+                                     lmargin1=10, lmargin2=20,
+                                     rmargin=150,
+                                     spacing3=5,
+                                     wrap="word"
+                                     )
+
+        self.chat_display.tag_config("bubble_out", 
+                                     background="#CDE8FF", foreground="black",
+                                     lmargin1=150, lmargin2=20,
+                                     rmargin=10,
+                                     spacing3=5,
+                                     justify="right",
+                                     wrap="word"
+                                     )
+
+        self.chat_display.tag_config("timestamp_left",
+                                     foreground="gray", font=("Arial", 8),
+                                     lmargin1=12,
+                                     lmargin2=20
+                                     )
+
+        self.chat_display.tag_config("timestamp_right",
+                                     foreground="gray", font=("Arial", 8),
+                                     justify="right",
+                                     rmargin=12
+                                     )
 
         # --- MESSAGE ENTRY ---
         entry_frame = tk.Frame(master)
@@ -85,6 +111,14 @@ class ChatWindow:
         # AES key per peer
         self.sym_keys = {}
 
+        # auth mode
+        self.auth_mode = tk.BooleanVar(value=False)
+
+        auth_frame = tk.Frame(master)
+        auth_frame.pack(pady=5)
+
+        tk.Checkbutton(auth_frame, text="Authenticity mode", variable=self.auth_mode).pack()
+
         # Start WebSocket in background thread
         threading.Thread(target=self.run_websocket_loop, daemon=True).start()
 
@@ -94,29 +128,41 @@ class ChatWindow:
 
     # --- GUI HELPERS ---
 
-    def display_message(self, sender, text, timestamp):
+    def display_message(self, sender, text, timestamp, is_outgoing):
         """
-        Display a message in the chat display with subtle colors for clarity.
+        Display message using bubble-style layout.
+        Incoming on left (light gray)
+        Outgoing on right (light blue)
 
         Args:
             sender (str): Name of the message sender.
             text (str): Message content.
             timestamp (datetime): Timestamp of the message.
+            is_outgoing (bool): Whether the message is outgoing or incoming.
         """
 
         self.chat_display.config(state="normal")
 
+        # Determine message type
+        bubble_tag = "bubble_out" if is_outgoing else "bubble_in"
+        time_tag = "timestamp_right" if is_outgoing else "timestamp_left"
+
+        # Format timestamp
         if timestamp:
-            time_str = timestamp.strftime("%H:%M:%S")
-            formatted = f"[{time_str}] {sender}: {text}\n"
-            self.chat_display.insert(tk.END, f"[{time_str}] ", "timestamp")
-            tag = "outgoing" if sender.startswith(self.username) else "incoming"
-            self.chat_display.insert(tk.END, f"{sender}: {text}\n", tag)
+            time_str = timestamp.strftime("%H:%M")
         else:
-            # No timestamp → simple message
-            formatted = f"{sender}: {text}\n"
-            tag = "outgoing" if sender.startswith(self.username) else "incoming"
-            self.chat_display.insert(tk.END, formatted, tag)
+            time_str = ""
+
+        # Insert bubble
+        # Add spacing before bubble
+        self.chat_display.insert(tk.END, "\n")
+
+        # Insert bubble text
+        bubble_text = f"{sender}:\n{text}\n"
+        self.chat_display.insert(tk.END, bubble_text, bubble_tag)
+
+        # Insert timestamp aligned properly
+        self.chat_display.insert(tk.END, time_str + "\n", time_tag)
 
         self.chat_display.config(state="disabled")
         self.chat_display.yview(tk.END)
@@ -148,30 +194,34 @@ class ChatWindow:
         """
         text = self.entry.get().strip()
         to = self.selected_peer.get()
-        if not text or to == "No peers yet":
-            self.display_message("SYSTEM", "No recipient available.", None)
+        if not text:
+            self.display_message("SYSTEM", "No message entered.", None, True)
+            return
+        if to == "No peers yet":
+            self.display_message("SYSTEM", "No recipient available.", None, True)
             return
 
         # Ensure we know recipient's public key (we need it to send AES key)
         if to not in self.peer_pubkeys:
-            self.display_message("SYSTEM", f"No public key for {to}", None)
+            self.display_message("SYSTEM", f"No public key for {to}", None, True)
             return
 
         # If no symmetric key yet, create one and send it encrypted with recipient RSA pubkey
         if to not in self.sym_keys:
-            aes_key = c.generate_symmetric_key()          # bytes
+            aes_key = c.generate_symmetric_key()
             self.sym_keys[to] = aes_key
 
-            # base64-encode AES key so we send ASCII content in JSON
-            aes_key_b64 = base64.b64encode(aes_key)    # bytes
-            # if your RSA helper expects bytes -> pass bytes; if it expects str encode appropriately
+            aes_key_b64 = base64.b64encode(aes_key).decode()
             encrypted_key = c.encrypt_rsa_message(aes_key_b64, self.peer_pubkeys[to])
-            # encrypted_key assumed bytes; base64 encode to send as JSON string
+
+            # base64 encode RSA output → string for JSON
+            encrypted_key_b64 = base64.b64encode(encrypted_key).decode()
+
             awaitable = self.ws.send(json.dumps({
                 "type": "aes_key",
                 "from": self.username,
                 "to": to,
-                "payload": base64.b64encode(encrypted_key).decode()
+                "payload": encrypted_key_b64
             }))
             asyncio.run_coroutine_threadsafe(awaitable, self.loop)
 
@@ -179,21 +229,27 @@ class ChatWindow:
         aes_key_for_peer = self.sym_keys.get(to)
         if aes_key_for_peer is None:
             # Shouldn't happen because we created it above, but guard anyway
-            self.display_message("SYSTEM", f"No AES key for {to}", None)
+            self.display_message("SYSTEM", f"No AES key for {to}", None, True)
             return
 
-        encrypted_payload = c.encrypt_symmetric_message(text, aes_key_for_peer)  # bytes
-        encrypted_payload_b64 = base64.b64encode(encrypted_payload).decode()
+        encrypted_payload = c.encrypt_symmetric_message(text, aes_key_for_peer)
 
         msg = {
             "type": "send",
             "from": self.username,
             "to": to,
-            "payload": encrypted_payload_b64
+            "payload": base64.b64encode(encrypted_payload).decode()
         }
+
+        if self.auth_mode.get():
+            # to sign, encrypt with user's private key
+            signature = c.sign_message(text, self.priv_key)
+            signature_b64 = base64.b64encode(signature).decode()
+            msg["signature"] = signature_b64
+
         asyncio.run_coroutine_threadsafe(self.ws.send(json.dumps(msg)), self.loop)
         # display with local timestamp
-        self.display_message(f"{self.username} (to {to})", text, timestamp=datetime.datetime.now())
+        self.display_message(f"{self.username} (to {to})", text, timestamp=datetime.datetime.now(), is_outgoing=True)
         self.entry.delete(0, tk.END)
 
     # --- RECEIVE ---
@@ -207,7 +263,7 @@ class ChatWindow:
         """
         while self.incoming_msgs:
             sender, text, timestamp = self.incoming_msgs.pop(0)
-            self.display_message(sender, text, timestamp)
+            self.display_message(sender, text, timestamp, is_outgoing=False)
         self.master.after(100, self.process_incoming)
 
     # --- WEBSOCKET BACKGROUND TASKS ---
@@ -243,10 +299,24 @@ class ChatWindow:
                     # Decipher the message
                     payload_bytes = base64.b64decode(payload)
                     try:
-                        timestamp, decrypted = c.decrypt_symmetric_message(payload_bytes, self.sym_keys[sender])
+                        decrypted = c.decrypt_symmetric_message(payload_bytes, self.sym_keys[sender])
+                        timestamp = datetime.datetime.now()
                     except Exception:
                         decrypted = "<Could not decrypt>"
                         timestamp = None
+
+                    # check signature if auth mode is enabled
+                    signature_b64 = data.get("signature")
+                    if signature_b64:
+                        signature = base64.b64decode(signature_b64)
+                        try:
+                            if not c.verify_signature(decrypted, signature, self.peer_pubkeys[sender]):
+                                print(f"[WARNING] Signature mismatch from {sender}")
+                                continue  # skip processing this message further
+                            print(f"[VALID SIGNATURE] auth mode is active and signature verified for {sender}")
+                        except Exception as e:
+                            print(f"[ERROR] Signature verification failed for {sender}: {e}")
+                            continue
 
                     self.incoming_msgs.append((sender, decrypted, timestamp))
                 
@@ -255,13 +325,8 @@ class ChatWindow:
                     encrypted_key_b64 = data["payload"]
                     encrypted_key = base64.b64decode(encrypted_key_b64)
 
-                    # decrypt RSA → get base64 AES
                     aes_key_b64 = c.decrypt_rsa_message(encrypted_key, self.priv_key)
-
-                    # convert base64 → bytes
                     aes_key = base64.b64decode(aes_key_b64)
-
-                    # store AES key
                     self.sym_keys[sender] = aes_key
 
     def run_websocket_loop(self):
