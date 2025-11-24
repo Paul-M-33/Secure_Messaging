@@ -183,24 +183,4 @@ def verify_signature(message: str, signature: str, public_key_pem: str) -> bool:
 
     except (ValueError, TypeError):
         print("The signature is not valid.")
-
-# ============================================================
-# SELF-TEST
-# ============================================================
-
-if __name__ == "__main__":
-    priv, pub = generate_rsa_keys()
-
-    # Test RSA
-    msg = "hello world"
-    encrypted = encrypt_rsa_message(msg, pub)
-    print("RSA OK:", decrypt_rsa_message(encrypted, priv) == msg)
-
-    # Test AES
-    key = generate_symmetric_key()
-    encrypted2 = encrypt_symmetric_message(msg, key)
-    print("AES OK:", decrypt_symmetric_message(encrypted2, key) == msg)
-
-    # Test signature
-    sig = sign_message(msg, priv)
-    print("Signature OK:", verify_signature(msg, sig, pub))
+        return False

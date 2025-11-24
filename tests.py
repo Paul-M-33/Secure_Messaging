@@ -2,7 +2,7 @@ import pytest
 import json
 import websockets
 import base64
-from cipher import generate_keys, encrypt_message, decrypt_message
+import cipher as c
 
 SERVER_URI = "ws://localhost:8765"
 
@@ -11,26 +11,56 @@ SERVER_URI = "ws://localhost:8765"
 # -------------------------------
 
 
-def test_generate_keys():
-    priv, pub = generate_keys()
+def test_generate_rsa_keys():
+    priv, pub = c.generate_rsa_keys()
     assert priv is not None
     assert pub is not None
     assert isinstance(pub, str)
+    assert isinstance(priv, str)
 
 
-def test_encrypt_decrypt():
-    alice_priv, alice_pub = generate_keys()
-    bob_priv, bob_pub = generate_keys()
+def test_rsa_encrypt_decrypt():
+    bob_priv, bob_pub = c.generate_rsa_keys()
 
     message = "Hello Bob! This is Alice."
-    encrypted = encrypt_message(message, bob_pub)
+    encrypted = c.encrypt_rsa_message(message, bob_pub)
     assert encrypted != message
 
-    decrypted = decrypt_message(encrypted, bob_priv)
+    decrypted = c.decrypt_rsa_message(encrypted, bob_priv)
     assert decrypted == message
+
+
+def test_generate_symmetric_keys():
+    key = c.generate_symmetric_key()
+    assert key is not None
+    assert isinstance(key, bytes)
+    assert len(key) == 32
+
+
+def test_aes_encrypt_decrypt():
+    key = c.generate_symmetric_key()
+
+    message = "Hello Bob! This is Alice."
+    encrypted = c.encrypt_symmetric_message(message, key)
+    assert encrypted != message
+
+    decrypted = c.decrypt_symmetric_message(encrypted, key)
+    assert decrypted == message
+
+
+def test_signature():
+    priv, pub = c.generate_rsa_keys()
+
+    message = "Hello Bob! This is Alice."
+    sig = c.sign_message(message, priv)
+    assert sig is not None
+    assert isinstance(sig, bytes)
+
+    assert c.verify_signature(message, sig, pub)
 
 # -------------------------------
 # 2️⃣ Tests Server Connectivity
+# /!\ Server must be running before running these tests
 # -------------------------------
 
 
@@ -41,7 +71,7 @@ async def test_server_register_and_get_peers():
     """
     async with websockets.connect(SERVER_URI) as ws:
         # Register test user
-        priv, pub = generate_keys()
+        priv, pub = c.generate_rsa_keys()
         await ws.send(json.dumps({
             "type": "register",
             "name": "PytestUser",
@@ -66,7 +96,7 @@ async def test_server_send_message():
     Requires server running.
     """
     async with websockets.connect(SERVER_URI) as ws:
-        priv, pub = generate_keys()
+        priv, pub = c.generate_rsa_keys()
         username = "PytestSender"
         await ws.send(json.dumps({
             "type": "register",
@@ -78,7 +108,7 @@ async def test_server_send_message():
         raw = await ws.recv()
 
         # Encrypt message and encode as base64
-        encrypted_msg = encrypt_message("Test message", pub)
+        encrypted_msg = c.encrypt_rsa_message("Test message", pub)
         encrypted_b64 = base64.b64encode(encrypted_msg).decode('ascii')
 
         # Send message to self
@@ -95,7 +125,7 @@ async def test_server_send_message():
 
         # Decode base64 and decrypt
         encrypted_bytes = base64.b64decode(data_forward["payload"])
-        decrypted_msg = decrypt_message(encrypted_bytes, priv)
+        decrypted_msg = c.decrypt_rsa_message(encrypted_bytes, priv)
 
         assert data_forward["type"] == "forward"
         assert decrypted_msg == "Test message"
