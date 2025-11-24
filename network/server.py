@@ -48,12 +48,14 @@ async def handler(ws):
                 to = msg["to"]
                 payload = msg["payload"]
                 sender = msg["from"]
+                message_id = msg["message_id"]
 
                 if to in clients:
                     out = {
                         "type": "forward",
                         "from": sender,
                         "payload": payload,
+                        "message_id": message_id
                     }
 
                     if "signature" in msg:

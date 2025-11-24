@@ -2,7 +2,7 @@ import pytest
 import json
 import websockets
 import base64
-import cipher as c
+import crypto.cipher as c
 
 SERVER_URI = "ws://localhost:8765"
 

@@ -6,7 +6,7 @@ import threading
 import json
 import asyncio
 import websockets
-import cipher as c
+import crypto.cipher as c
 
 
 SERVER_URI = "ws://localhost:8765"  # relay server
@@ -108,8 +108,15 @@ class ChatWindow:
         # --- CRYPTO ---
         self.priv_key, self.pub_key = c.generate_rsa_keys()
         self.peer_pubkeys = {}
+
         # AES key per peer
         self.sym_keys = {}
+
+        # --- Anti-replay state ---
+        # send_counters: next msg_id to use for each recipient
+        self.send_counters = {}
+        # last_seen: highest msg_id accepted from each sender
+        self.last_seen = {}
 
         # auth mode
         self.auth_mode = tk.BooleanVar(value=False)
@@ -225,6 +232,10 @@ class ChatWindow:
             }))
             asyncio.run_coroutine_threadsafe(awaitable, self.loop)
 
+        # Prepare anti-replay msg_id (simple monotonic counter)
+        next_id = self.send_counters.get(to, 1)
+        self.send_counters[to] = next_id + 1  # increment for next message
+
         # Now encrypt the message with AES and send
         aes_key_for_peer = self.sym_keys.get(to)
         if aes_key_for_peer is None:
@@ -238,7 +249,8 @@ class ChatWindow:
             "type": "send",
             "from": self.username,
             "to": to,
-            "payload": base64.b64encode(encrypted_payload).decode()
+            "payload": base64.b64encode(encrypted_payload).decode(),
+            "message_id": next_id
         }
 
         if self.auth_mode.get():
@@ -295,12 +307,37 @@ class ChatWindow:
                 elif t == "forward":
                     sender = data["from"]
                     payload = data["payload"]
+                    msg_id = data["message_id"]
 
+                    timestamp = datetime.datetime.now()
+
+                    # Anti-replay: msg_id must be present and strictly greater than last_seen
+                    if msg_id is None:
+                        print(f"[WARN] no msg_id from {sender}; dropping (anti-replay enforced)")
+                        continue
+
+                    last = self.last_seen.get(sender, 0)
+                    if not isinstance(msg_id, int):
+                        try:
+                            msg_id = int(msg_id)
+                        except Exception:
+                            print(f"[WARN] invalid msg_id format from {sender}; dropping")
+                            continue
+
+                    if msg_id <= last:
+                        # replay or out-of-order/duplicate: drop
+                        print(f"[REPLAY] dropped message from {sender} with msg_id={msg_id} (last_seen={last})")
+                        continue
+
+                    # If we accept this message, update last_seen immediately
+                    print(f"[REPLAY] message accepted from {sender} with msg_id={msg_id} (last_seen={last})")
+                    self.last_seen[sender] = msg_id
+                    
                     # Decipher the message
                     payload_bytes = base64.b64decode(payload)
+
                     try:
                         decrypted = c.decrypt_symmetric_message(payload_bytes, self.sym_keys[sender])
-                        timestamp = datetime.datetime.now()
                     except Exception:
                         decrypted = "<Could not decrypt>"
                         timestamp = None
@@ -335,29 +372,3 @@ class ChatWindow:
         """
         asyncio.set_event_loop(self.loop)
         self.loop.run_until_complete(self.websocket_main())
-
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    root.title("Login")
-
-    tk.Label(root, text="Enter username:").pack(padx=10, pady=10)
-
-    username_entry = tk.Entry(root, width=35)
-    username_entry.pack(padx=10, pady=5)
-
-    def start_chat():
-        """
-        Callback for the login button. Starts the chat window for the entered username.
-        """
-        name = username_entry.get().strip()
-        if not name:
-            return
-        root.destroy()  # close login window
-        chat_root = tk.Tk()
-        ChatWindow(chat_root, name)
-        chat_root.mainloop()
-
-    tk.Button(root, text="Connect", command=start_chat).pack(pady=10)
-
-    root.mainloop()
