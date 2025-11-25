@@ -7,7 +7,15 @@ import json
 import asyncio
 import websockets
 import crypto.cipher as c
+import logging
 
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 SERVER_URI = "ws://localhost:8765"  # relay server
 
@@ -313,7 +321,7 @@ class ChatWindow:
 
                     # Anti-replay: msg_id must be present and strictly greater than last_seen
                     if msg_id is None:
-                        print(f"[WARN] no msg_id from {sender}; dropping (anti-replay enforced)")
+                        logger.warning(f"[WARN] no msg_id from {sender}; dropping (anti-replay enforced)")
                         continue
 
                     last = self.last_seen.get(sender, 0)
@@ -321,16 +329,16 @@ class ChatWindow:
                         try:
                             msg_id = int(msg_id)
                         except Exception:
-                            print(f"[WARN] invalid msg_id format from {sender}; dropping")
+                            logger.warning(f"[WARN] invalid msg_id format from {sender}; dropping")
                             continue
 
                     if msg_id <= last:
                         # replay or out-of-order/duplicate: drop
-                        print(f"[REPLAY] dropped message from {sender} with msg_id={msg_id} (last_seen={last})")
+                        logger.error(f"[REPLAY] dropped message from {sender} with msg_id={msg_id} (last_seen={last})")
                         continue
 
                     # If we accept this message, update last_seen immediately
-                    print(f"[REPLAY] message accepted from {sender} with msg_id={msg_id} (last_seen={last})")
+                    logger.info(f"[REPLAY] message accepted from {sender} with msg_id={msg_id} (last_seen={last})")
                     self.last_seen[sender] = msg_id
                     
                     # Decipher the message
@@ -348,11 +356,11 @@ class ChatWindow:
                         signature = base64.b64decode(signature_b64)
                         try:
                             if not c.verify_signature(decrypted, str(msg_id), signature, self.peer_pubkeys[sender]):
-                                print(f"[WARNING] Signature mismatch from {sender}")
+                                logger.error(f"[ERROR] Signature mismatch from {sender}")
                                 continue  # skip processing this message further
-                            print(f"[VALID SIGNATURE] auth mode is active and signature verified for {sender}")
+                            logger.info(f"[VALID SIGNATURE] auth mode is active and signature verified for {sender}")
                         except Exception as e:
-                            print(f"[ERROR] Signature verification failed for {sender}: {e}")
+                            logger.error(f"[ERROR] Signature verification failed for {sender}: {e}")
                             continue
 
                     self.incoming_msgs.append((sender, decrypted, timestamp))

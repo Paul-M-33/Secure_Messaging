@@ -1,11 +1,14 @@
 # --- CRYPTO HELPERS ---
 
 import base64
+import logging
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Cipher import PKCS1_OAEP, AES
 from Cryptodome.Random import get_random_bytes
 from Crypto.Signature import pkcs1_15
 from Crypto.Hash import SHA256
+
+logger = logging.getLogger(__name__)
 
 # ============================================================
 # RSA KEY GENERATION
@@ -50,14 +53,14 @@ def encrypt_rsa_message(message: str, public_key_pem: str) -> bytes:
     Example:
         encrypted = encrypt_message("Hello", recipient_pub_key)
     """
-    message = message.encode()
+    message_to_encrypt = message.encode()
     pubkey = RSA.import_key(public_key_pem)
     cipher = PKCS1_OAEP.new(pubkey)
-    encrypted = cipher.encrypt(message)
+    encrypted = cipher.encrypt(message_to_encrypt)
     return encrypted
 
 
-def decrypt_rsa_message(ciphertext: bytes, private_key_pem: str) -> bytes:
+def decrypt_rsa_message(ciphertext: bytes, private_key_pem: str) -> str:
     """
     Decrypt an encrypted message using the recipient's private key.
 
@@ -186,5 +189,4 @@ def verify_signature(message: str, msg_id: str, signature: str, public_key_pem: 
         return True
 
     except (ValueError, TypeError):
-        print("The signature is not valid.")
         return False

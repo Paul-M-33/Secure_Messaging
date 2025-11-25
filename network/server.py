@@ -1,6 +1,15 @@
 import asyncio
 import json
 import websockets
+import logging
+
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 # Store connected clients: dict of : name → dict of : (websocket, public key)
 clients = {}
@@ -36,7 +45,7 @@ async def handler(ws):
             if t == "register":
                 name = msg["name"]
                 clients[name] = {"ws": ws, "pub_key": msg["pub_key"]}
-                print(f"[CONNECT] {name}")
+                logger.info(f"[CONNECT] {name}")
                 await broadcast_peers()
 
             # Client asks for peer list
@@ -62,7 +71,7 @@ async def handler(ws):
                         out["signature"] = msg["signature"]
 
                     await clients[to]["ws"].send(json.dumps(out))
-                    print(f"[FORWARD] {sender} → {to}: {payload}")
+                    logger.info(f"[FORWARD] {sender} → {to}: {payload}")
                 else:
                     await ws.send(json.dumps({"type": "error", "message": f"{to} not online"}))
 
@@ -72,7 +81,7 @@ async def handler(ws):
                 to = msg["to"]
                 encrypted_key = msg["payload"]
 
-                print(f"[AES_KEY_CIPHERED] {sender} → {to}: {encrypted_key}")
+                logger.info(f"[AES_KEY_CIPHERED] {sender} → {to}: {encrypted_key}")
 
                 # Build the forwarded packet
                 out = {
@@ -90,7 +99,7 @@ async def handler(ws):
     finally:
         if name and name in clients and clients[name] is ws:
             del clients[name]
-            print(f"[DISCONNECT] {name}")
+            logger.info(f"[DISCONNECT] {name}")
             await broadcast_peers()
 
 
@@ -147,7 +156,7 @@ async def main():
     - Uses the 'handler' function for each new client connection
     - Keeps the server running forever
     """
-    print("Server running at ws://localhost:8765")
+    logger.info("Server running at ws://localhost:8765")
     async with websockets.serve(handler, "0.0.0.0", 8765):
         await asyncio.Future()  # run forever
 
