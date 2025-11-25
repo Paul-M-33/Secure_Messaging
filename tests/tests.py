@@ -1,7 +1,7 @@
-import pytest
-import json
-import websockets
 import base64
+import json
+import pytest
+import websockets
 import crypto.cipher as c
 
 SERVER_URI = "ws://localhost:8765"
@@ -52,11 +52,12 @@ def test_signature():
     priv, pub = c.generate_rsa_keys()
 
     message = "Hello Bob! This is Alice."
-    sig = c.sign_message(message, priv)
+    message_id = "6"
+    sig = c.sign_message(message, message_id, priv)
     assert sig is not None
     assert isinstance(sig, bytes)
 
-    assert c.verify_signature(message, sig, pub)
+    assert c.verify_signature(message, message_id, sig, pub)
 
 # -------------------------------
 # 2️⃣ Tests Server Connectivity
@@ -116,7 +117,8 @@ async def test_server_send_message():
             "type": "send",
             "from": username,
             "to": username,
-            "payload": encrypted_b64
+            "payload": encrypted_b64,
+            "message_id": "1"
         }))
 
         # Receive the forwarded message

@@ -143,39 +143,43 @@ def decrypt_symmetric_message(ciphertext_b64: str, key: bytes) -> str:
 # ============================================================
 
 
-def sign_message(message: str, private_key_pem: str) -> str:
+def sign_message(message: str, msg_id: str, private_key_pem: str) -> bytes:
     """
     Sign a message using the private key.
 
     Parameters:
         message (str): The message to sign.
+        msg_id (int): The message ID.
         private_key_pem (str): The private key object.
 
     Returns:
-        str: The signature of the message.
+        str: The signature of the message ID concatenated with the message.
     """
-    message = message.encode()
+    payload = f"{msg_id}:{message}"
+    message_to_sign = payload.encode()
     priv = RSA.import_key(private_key_pem)
-    h = SHA256.new(message)
+    h = SHA256.new(message_to_sign)
     signature = pkcs1_15.new(priv).sign(h)
     return signature
 
 
-def verify_signature(message: str, signature: str, public_key_pem: str) -> bool:
+def verify_signature(message: str, msg_id: str, signature: str, public_key_pem: str) -> bool:
     """
     Verify the signature of a message using the public key.
 
     Parameters:
         message (str): The message to verify.
+        msg_id (int): The message ID.
         signature (str): The signature of the message.
         public_key_pem (str): The public key object.
 
     Returns:
         bool: True if the signature is valid, raises an exception otherwise.
     """
-    message = message.encode()
+    payload = f"{msg_id}:{message}"
+    message_to_verify = payload.encode()
     key = RSA.import_key(public_key_pem)
-    h = SHA256.new(message)
+    h = SHA256.new(message_to_verify)
 
     try:
         pkcs1_15.new(key).verify(h, signature)

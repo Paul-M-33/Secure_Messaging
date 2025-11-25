@@ -255,7 +255,7 @@ class ChatWindow:
 
         if self.auth_mode.get():
             # to sign, encrypt with user's private key
-            signature = c.sign_message(text, self.priv_key)
+            signature = c.sign_message(text, next_id, self.priv_key)
             signature_b64 = base64.b64encode(signature).decode()
             msg["signature"] = signature_b64
 
@@ -347,7 +347,7 @@ class ChatWindow:
                     if signature_b64:
                         signature = base64.b64decode(signature_b64)
                         try:
-                            if not c.verify_signature(decrypted, signature, self.peer_pubkeys[sender]):
+                            if not c.verify_signature(decrypted, str(msg_id), signature, self.peer_pubkeys[sender]):
                                 print(f"[WARNING] Signature mismatch from {sender}")
                                 continue  # skip processing this message further
                             print(f"[VALID SIGNATURE] auth mode is active and signature verified for {sender}")
