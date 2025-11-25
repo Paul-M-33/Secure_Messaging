@@ -71,7 +71,7 @@ async def handler(ws):
                         out["signature"] = msg["signature"]
 
                     await clients[to]["ws"].send(json.dumps(out))
-                    logger.info(f"[FORWARD] {sender} → {to}: {payload}")
+                    logger.info(f"[FORWARD] {sender} → {to}, with payload: {payload}")
                 else:
                     await ws.send(json.dumps({"type": "error", "message": f"{to} not online"}))
 

@@ -19,9 +19,13 @@ if __name__ == "__main__":
             return
         root.destroy()  # close login window
         chat_root = tk.Tk()
+        chat_root.geometry("720x560")
         ChatWindow(chat_root, name)
         chat_root.mainloop()
 
     tk.Button(root, text="Connect", command=start_chat).pack(pady=10)
 
     root.mainloop()
+
+
+# TODO : persistent keys, modular GUI, group CHAT ?
