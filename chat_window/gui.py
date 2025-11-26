@@ -9,6 +9,7 @@ import asyncio
 import websockets
 import crypto.cipher as c
 import logging
+from Cryptodome.PublicKey import RSA
 
 # ---------------------- CONFIG ----------------------
 SERVER_URI = "ws://localhost:8765"
@@ -45,7 +46,7 @@ class ChatWindow:
         peer_pubkeys (dict): Mapping peer username → public key.
         incoming_msgs (list[tuple[str, str]]): Queue of received messages.
     """
-    def __init__(self, master, username):
+    def __init__(self, master, username, private_key, public_key) -> None:
         """
         Initialize the chat window GUI and network/crypto setup.
 
@@ -62,7 +63,11 @@ class ChatWindow:
         self.loop = asyncio.new_event_loop()
 
         # Crypto state
-        self.priv_key, self.pub_key = c.generate_rsa_keys()
+        self.private_key_pem = private_key.decode()
+        self.public_key_pem = public_key.decode()
+        self.priv_key = RSA.import_key(self.private_key_pem)
+        self.pub_key = RSA.import_key(self.public_key_pem)
+
         self.peer_pubkeys = {}
         self.sym_keys = {}
 
@@ -333,7 +338,7 @@ class ChatWindow:
 
         if self.auth_mode.get():
             # to sign, encrypt with user's private key
-            signature = c.sign_message(text, next_id, self.priv_key)
+            signature = c.sign_message(text, next_id, self.private_key_pem)
             signature_b64 = base64.b64encode(signature).decode()
             msg["signature"] = signature_b64
 
@@ -374,7 +379,7 @@ class ChatWindow:
             async with websockets.connect(SERVER_URI) as ws:
                 self.ws = ws
                 self.status.config(text="Connected")
-                await ws.send(json.dumps({"type": "register", "name": self.username, "pub_key": self.pub_key}))
+                await ws.send(json.dumps({"type": "register", "name": self.username, "pub_key": self.public_key_pem}))
                 await ws.send(json.dumps({"type": "get_peers"}))
 
                 async for raw in ws:
@@ -449,7 +454,7 @@ class ChatWindow:
                         encrypted_key_b64 = data["payload"]
                         encrypted_key = base64.b64decode(encrypted_key_b64)
 
-                        aes_key_b64 = c.decrypt_rsa_message(encrypted_key, self.priv_key)
+                        aes_key_b64 = c.decrypt_rsa_message(encrypted_key, self.private_key_pem)
                         aes_key = base64.b64decode(aes_key_b64)
                         self.sym_keys[sender] = aes_key
         finally:
