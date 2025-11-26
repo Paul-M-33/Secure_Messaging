@@ -61,7 +61,7 @@ class ChatWindow:
         self.ws = None
         self.loop = asyncio.new_event_loop()
 
-        # Crypto state (unchanged)
+        # Crypto state
         self.priv_key, self.pub_key = c.generate_rsa_keys()
         self.peer_pubkeys = {}
         self.sym_keys = {}
@@ -70,7 +70,7 @@ class ChatWindow:
         self.send_counters = {}
         self.last_seen = {}
 
-        # Incoming queue (list used like before)
+        # Incoming queue
         self.incoming_msgs = []
 
         # Peers
@@ -85,10 +85,10 @@ class ChatWindow:
 
         threading.Thread(target=self.run_websocket_loop, daemon=True, name="ws-thread").start()
 
-        # Periodically handle incoming messages (keeps your original scheduling)
+        # Periodically handle incoming messages
         self.master.after(100, self.process_incoming)
 
-    # ---------------------- UI BUILD (modern) ----------------------
+    # ---------------------- UI BUILD HELPERS ----------------------
     def _build_ui(self):
         style = ttk.Style(self.master)
         try:
@@ -112,7 +112,7 @@ class ChatWindow:
         self.chat_display = scrolledtext.ScrolledText(container, wrap="word", state="disabled", height=18)
         self.chat_display.grid(row=1, column=0, sticky="nsew")
 
-        # bubble/tag styling (kept similar to your original tags but adapted fonts/colors)
+        # bubble/tag styling
         self.chat_display.tag_config("bubble_in",
                                      background="#F3F3F3",
                                      foreground="#222222",
@@ -279,7 +279,7 @@ class ChatWindow:
         """
         text = self.entry.get().strip()
         to = self.selected_peer.get()
-        if not text:
+        if not text:  # should not happen because button is disabled if no text
             self.display_message("SYSTEM", "No message entered.", None, True)
             return
         if to == "No peers yet":

@@ -103,7 +103,6 @@ async def handler(ws):
             await broadcast_peers()
 
 
-# Send the list of connected users to one client
 async def send_peers(ws):
     """
     Send the current list of connected users and their public keys to a single client.
@@ -124,7 +123,6 @@ async def send_peers(ws):
     }))
 
 
-# Send the list of connected users to everyone
 async def broadcast_peers():
     """
     Broadcast the current list of connected users and their public keys to all clients.

@@ -28,4 +28,4 @@ if __name__ == "__main__":
     root.mainloop()
 
 
-# TODO : persistent keys, modular GUI, group CHAT ?
+# TODO : persistent keys, modular GUI, group CHAT, avatars in connection window ?

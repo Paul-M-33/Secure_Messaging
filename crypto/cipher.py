@@ -84,7 +84,7 @@ def decrypt_rsa_message(ciphertext: bytes, private_key_pem: str) -> str:
 # ============================================================
 
 
-def generate_symmetric_key():
+def generate_symmetric_key() -> bytes:
     """
     Generate a new AES key.
 
