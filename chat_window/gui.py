@@ -1,15 +1,19 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import scrolledtext
+from tkinter import filedialog, messagebox
 import base64
 import datetime
 import threading
 import json
 import asyncio
 import websockets
+import os
 import crypto.cipher as c
 import logging
 from Cryptodome.PublicKey import RSA
+from Cryptodome.Cipher import PKCS1_OAEP, AES
+from Cryptodome.Random import get_random_bytes
 
 # ---------------------- CONFIG ----------------------
 SERVER_URI = "ws://localhost:8765"
@@ -57,6 +61,7 @@ class ChatWindow:
         self.master = master
         self.username = username
         self.master.title(f"SecureChat - {username}")
+        self.master.protocol("WM_DELETE_WINDOW", self.on_close)
 
         # Networking / asyncio
         self.ws = None
@@ -75,8 +80,12 @@ class ChatWindow:
         self.send_counters = {}
         self.last_seen = {}
 
+        # Outgoing queue
+        self.sent_msgs = []
+
         # Incoming queue
         self.incoming_msgs = []
+        self.history_msgs = []
 
         # Peers
         self.peers = []
@@ -146,6 +155,9 @@ class ChatWindow:
 
         self.auth_chk = ttk.Checkbutton(controls, text="Authenticity", variable=self.auth_mode)
         self.auth_chk.grid(row=0, column=2, sticky="w")
+
+        self.load_history = ttk.Button(controls, text="Load History", command=self.load_history_dialog)
+        self.load_history.grid(row=0, column=3, padx=(12, 0))
 
         # bottom: entry + send
         bottom = ttk.Frame(container)
@@ -296,6 +308,9 @@ class ChatWindow:
             self.display_message("SYSTEM", f"No public key for {to}", None, True)
             return
 
+        # remember sent messages to save them
+        self.sent_msgs.append((to, text, datetime.datetime.now()))
+
         # If no symmetric key yet, create one and send it encrypted with recipient RSA pubkey
         if to not in self.sym_keys:
             aes_key = c.generate_symmetric_key()
@@ -363,6 +378,134 @@ class ChatWindow:
             self.display_message(sender, text, timestamp, is_outgoing=False)
         self.master.after(100, self.process_incoming)
 
+    # --- SAVE MESSAGES ---
+
+    def save_messages(self):
+        """
+        Save chat history in a file encrypted with user's RSA public key.
+        """
+        # --- Ensure history folder exists ---
+        history_dir = "history"
+        os.makedirs(history_dir, exist_ok=True)
+
+        if not self.history_msgs and not self.sent_msgs:
+            return  # nothing to save
+
+        # Build unified history list
+        all_msgs = []
+
+        # incoming: (sender, text, timestamp)
+        for sender, text, timestamp in self.history_msgs:
+            all_msgs.append({
+                "direction": "incoming",
+                "peer": sender,
+                "text": text,
+                "timestamp": timestamp.isoformat() if timestamp else None
+            })
+
+        # outgoing: (recipient, text, timestamp)
+        for to, text, timestamp in self.sent_msgs:
+            all_msgs.append({
+                "direction": "outgoing",
+                "peer": to,
+                "text": text,
+                "timestamp": timestamp.isoformat() if timestamp else None
+            })
+
+        # sort by timestamp
+        all_msgs.sort(key=lambda msg: msg["timestamp"])
+
+        # Serialize
+        data_json = json.dumps(all_msgs)
+
+        # 1. Generate AES-256 key
+        aes_key = get_random_bytes(32)
+
+        # 2. Encrypt JSON using AES-GCM
+        cipher_aes = AES.new(aes_key, AES.MODE_GCM)
+        ciphertext, tag = cipher_aes.encrypt_and_digest(data_json.encode("utf-8"))
+
+        # 3. Encrypt AES key with RSA public key
+        pub_key = RSA.import_key(self.public_key_pem)
+        rsa_cipher = PKCS1_OAEP.new(pub_key)
+        encrypted_key = rsa_cipher.encrypt(aes_key)
+
+        # 4. Build final package
+        package = {
+            "encrypted_key": base64.b64encode(encrypted_key).decode(),
+            "nonce": base64.b64encode(cipher_aes.nonce).decode(),
+            "tag": base64.b64encode(tag).decode(),
+            "ciphertext": base64.b64encode(ciphertext).decode()
+        }
+
+        # File name
+        now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"history/{self.username}_messages_{now}.txt"
+
+        with open(filename, "w") as f:
+            f.write(json.dumps(package))
+
+        logger.info(f"Saved encrypted history to {filename}")
+
+    def load_history_from_file(self, filename):
+        with open(filename, "r") as f:
+            package = json.loads(f.read())
+
+        encrypted_key = base64.b64decode(package["encrypted_key"])
+        nonce = base64.b64decode(package["nonce"])
+        tag = base64.b64decode(package["tag"])
+        ciphertext = base64.b64decode(package["ciphertext"])
+
+        # 1. Decrypt AES key with RSA private key
+        priv_key = RSA.import_key(self.private_key_pem)
+        rsa_cipher = PKCS1_OAEP.new(priv_key)
+        aes_key = rsa_cipher.decrypt(encrypted_key)
+
+        # 2. Decrypt JSON using AES-GCM
+        cipher_aes = AES.new(aes_key, AES.MODE_GCM, nonce)
+        data_json = cipher_aes.decrypt_and_verify(ciphertext, tag)
+        all_msgs = json.loads(data_json.decode("utf-8"))
+
+        # 3. Clear the chat area before loading
+        self._clear_chat()
+
+        # 4. Display messages in exact saved order
+        for msg in all_msgs:
+            direction = msg["direction"]
+            peer = msg["peer"]
+            text = msg["text"]
+            timestamp = (
+                datetime.datetime.fromisoformat(msg["timestamp"])
+                if msg["timestamp"] else None
+            )
+
+            if direction == "incoming":
+                self.display_message(peer, text, timestamp, is_outgoing=False)
+            else:
+                self.display_message(f"{self.username} → {peer}", text, timestamp, is_outgoing=True)
+
+        logger.info("[HISTORY] Successfully loaded and rendered encrypted history.")
+
+    def load_history_dialog(self):
+        filepath = filedialog.askopenfilename(
+            title="Select Encrypted History File",
+            filetypes=[("Encrypted chat history", "*.txt"), ("All files", "*.*")]
+        )
+
+        if not filepath:
+            return  # user cancelled
+
+        try:
+            self.load_history_from_file(filepath)
+            messagebox.showinfo("History loaded", "Encrypted message history successfully loaded.")
+        except Exception as e:
+            logger.error(f"[HISTORY] Failed to load history: {e}")
+            messagebox.showerror("Error", f"Could not load history:\n{e}")
+
+    def on_close(self):
+        self.save_messages()
+        self.master.destroy()
+
     # --- WEBSOCKET BACKGROUND TASKS ---
 
     async def websocket_main(self):
@@ -419,7 +562,7 @@ class ChatWindow:
                         # If we accept this message, update last_seen immediately
                         logger.info(f"[REPLAY] message accepted from {sender} with msg_id={msg_id} (last_seen={last})")
                         self.last_seen[sender] = msg_id
-                        
+
                         # Decipher the message
                         payload_bytes = base64.b64decode(payload)
 
@@ -448,6 +591,7 @@ class ChatWindow:
                                 continue
 
                         self.incoming_msgs.append((sender, decrypted, timestamp))
+                        self.history_msgs.append((sender, decrypted, timestamp))
 
                     elif t == "aes_key":
                         sender = data["from"]
