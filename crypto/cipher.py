@@ -2,11 +2,13 @@
 
 import base64
 import logging
+import json
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Cipher import PKCS1_OAEP, AES
 from Cryptodome.Random import get_random_bytes
 from Crypto.Signature import pkcs1_15
 from Crypto.Hash import SHA256
+from Crypto.Protocol.KDF import PBKDF2
 
 logger = logging.getLogger(__name__)
 
@@ -190,3 +192,63 @@ def verify_signature(message: str, msg_id: str, signature: str, public_key_pem: 
 
     except (ValueError, TypeError):
         return False
+
+
+# ============================================================
+# PRIVATE KEY ENCRYPTION / DECRYPTION
+# ============================================================
+def encrypt_private_key(private_pem: str, password: str) -> str:
+    """
+    Encrypt a PEM private key using a key derived from the password.
+    Returns a JSON string containing salt, nonce, tag, ciphertext.
+
+    Parameters:
+        private_pem (str): The private key.
+        password (str): The user password.
+
+    Returns:
+        str: The encrypted private key.
+    """
+
+    salt = get_random_bytes(16)
+    key = PBKDF2(password, salt, dkLen=32, count=200_000)
+
+    cipher = AES.new(key, AES.MODE_GCM)
+    ciphertext, tag = cipher.encrypt_and_digest(private_pem.encode())
+
+    blob = {
+        "salt": base64.b64encode(salt).decode(),
+        "nonce": base64.b64encode(cipher.nonce).decode(),
+        "tag": base64.b64encode(tag).decode(),
+        "ciphertext": base64.b64encode(ciphertext).decode()
+    }
+
+    return json.dumps(blob)
+
+
+def decrypt_private_key(encrypted_blob: str, password: str) -> str:
+    """
+    Decrypts a previously encrypted private key using the user password.
+    Returns PEM text.
+
+    Parameters:
+        encrypted_blob (str): A JSON string containing salt, nonce, tag, ciphertext.
+        password (str): The user password.
+
+    Returns:
+        str: The decrypted private key.
+    """
+
+    blob = json.loads(encrypted_blob)
+
+    salt = base64.b64decode(blob["salt"])
+    nonce = base64.b64decode(blob["nonce"])
+    ciphertext = base64.b64decode(blob["ciphertext"])
+    tag = base64.b64decode(blob["tag"])
+
+    key = PBKDF2(password, salt, dkLen=32, count=200_000)
+
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+    private_pem = cipher.decrypt_and_verify(ciphertext, tag)
+
+    return private_pem.decode()

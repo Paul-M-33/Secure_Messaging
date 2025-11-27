@@ -120,14 +120,20 @@ class LoginWindow:
                 messagebox.showerror("Error", "Incorrect password.")
                 return
 
-            # load stored RSA keys
-            private_key = base64.b64decode(user["private_key"])
+            # load and decrypt private key
+            encrypted_priv = user["encrypted_private_key"]
+            priv_pem = c.decrypt_private_key(encrypted_priv, password)
+
+            # load public key
             public_key = base64.b64decode(user["public_key"])
+
+            # convert PEM (string) to bytes so ChatWindow can import it
+            private_key = priv_pem.encode()
 
             # run chat
             self.master.destroy()
             chat_root = tk.Tk()
-            chat_root.geometry("720x560")
+            chat_root.geometry("480x375")
             ChatWindow(chat_root, username, private_key, public_key)
             chat_root.mainloop()
             return
@@ -152,11 +158,14 @@ class LoginWindow:
         # generate fresh RSA keys
         priv_pem, pub_pem = c.generate_rsa_keys()
 
-        # store account in JSON (base64 encoded)
+        # encrypt private key using user's password
+        encrypted_priv = c.encrypt_private_key(priv_pem, password)
+
+        # store public key as plain PEM (base64 for JSON)
         self.users[username] = {
             "salt": salt,
             "password_hash": hashed,
-            "private_key": base64.b64encode(priv_pem.encode()).decode(),
+            "encrypted_private_key": encrypted_priv,
             "public_key": base64.b64encode(pub_pem.encode()).decode()
         }
 
