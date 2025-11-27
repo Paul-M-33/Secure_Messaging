@@ -8,34 +8,147 @@ import base64
 from chat_window.gui import ChatWindow
 import crypto.cipher as c
 
-
 USERS_FILE = "users.json"
 
 
 # ---------------------------------------------------------
 # Utility functions
 # ---------------------------------------------------------
-def load_users():
-    if not os.path.exists(USERS_FILE):
+def load_users(path=USERS_FILE):
+    """
+    Load users from a JSON file.
+
+    Args:
+        path (str): Path to the JSON file containing user data. Defaults to USERS_FILE.
+
+    Returns:
+        dict: A dictionary mapping usernames to user data.
+    """
+    if not os.path.exists(path):
         return {}
-    with open(USERS_FILE, "r") as f:
+    with open(path, "r") as f:
         return json.load(f)
 
 
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
+def save_users(users, path=USERS_FILE):
+    """
+    Save users dictionary to a JSON file.
+
+    Args:
+        users (dict): Dictionary containing user data.
+        path (str): Path to the JSON file to save data. Defaults to USERS_FILE.
+    """
+    with open(path, "w") as f:
         json.dump(users, f, indent=4)
 
 
 def hash_password(password, salt):
+    """
+    Generate a SHA-256 hash of the password concatenated with the salt.
+
+    Args:
+        password (str): The user's password.
+        salt (str): A random salt.
+
+    Returns:
+        str: Hexadecimal string of the hashed password.
+    """
     return hashlib.sha256((password + salt).encode()).hexdigest()
+
+
+# ---------------------------------------------------------
+# Pure logic functions
+# ---------------------------------------------------------
+def validate_login(users, username, password):
+    """
+    Validate login credentials.
+
+    Args:
+        users (dict): Dictionary of all registered users.
+        username (str): The username to validate.
+        password (str): The password to validate.
+
+    Returns:
+        tuple: (success (bool), message (str)). `success` is True if login is valid; otherwise False.
+               `message` contains an error message if login failed.
+    """
+    if not username or not password:
+        return False, "Enter username and password."
+    if username not in users:
+        return False, "Unknown user."
+    user = users[username]
+    hashed_attempt = hash_password(password, user["salt"])
+    if hashed_attempt != user["password_hash"]:
+        return False, "Incorrect password."
+    return True, ""
+
+
+def validate_create(users, username, password, confirm):
+    """
+    Validate data for creating a new account.
+
+    Args:
+        users (dict): Dictionary of all registered users.
+        username (str): Desired username.
+        password (str): Desired password.
+        confirm (str): Confirmation of password.
+
+    Returns:
+        tuple: (success (bool), message (str)). `success` is True if creation is valid; otherwise False.
+               `message` contains an error message if creation failed.
+    """
+    if not username or not password:
+        return False, "Enter username and password."
+    if password != confirm:
+        return False, "Passwords do not match."
+    if username in users:
+        return False, "This username is already taken."
+    return True, ""
+
+
+def create_account(users, username, password, path=USERS_FILE):
+    """
+    Create a new user account and update the users dictionary.
+
+    Args:
+        users (dict): Dictionary of all registered users.
+        username (str): Username for the new account.
+        password (str): Password for the new account.
+
+    Returns:
+        dict: Updated users dictionary including the new user.
+    """
+    salt = os.urandom(16).hex()
+    hashed = hash_password(password, salt)
+
+    priv_pem, pub_pem = c.generate_rsa_keys()
+    encrypted_priv = c.encrypt_private_key(priv_pem, password)
+    users[username] = {
+        "salt": salt,
+        "password_hash": hashed,
+        "encrypted_private_key": encrypted_priv,
+        "public_key": base64.b64encode(pub_pem.encode()).decode()
+    }
+    save_users(users, path)
+    return users
 
 
 # ---------------------------------------------------------
 # GUI APPLICATION
 # ---------------------------------------------------------
 class LoginWindow:
+    """
+    Tkinter GUI window for SecureChat login and account creation.
+    Handles user input, validation, and launching the chat window.
+    """
+
     def __init__(self, master):
+        """
+        Initialize the login window GUI.
+
+        Args:
+            master (tk.Tk): The root Tkinter window.
+        """
         self.master = master
         self.master.title("SecureChat Login")
         self.users = load_users()
@@ -73,6 +186,10 @@ class LoginWindow:
 
     # -----------------------------------------------------
     def switch_mode(self):
+        """
+        Toggle between login and account creation modes.
+        Updates GUI elements accordingly.
+        """
         if self.mode.get() == "login":
             # switch to create
             self.mode.set("create")
@@ -95,39 +212,23 @@ class LoginWindow:
 
     # -----------------------------------------------------
     def handle_submit(self):
+        """
+        Handle the submit button click.
+        Performs login or account creation depending on mode,
+        and launches ChatWindow on successful login.
+        """
         username = self.username_entry.get().strip()
         password = self.password_entry.get().strip()
 
-        if not username or not password:
-            messagebox.showerror("Error", "Enter username and password.")
-            return
-
-        # -------------------------------------------------
-        # LOGIN MODE
-        # -------------------------------------------------
         if self.mode.get() == "login":
-
-            if username not in self.users:
-                messagebox.showerror("Error", "Unknown user.")
+            success, msg = validate_login(self.users, username, password)
+            if not success:
+                messagebox.showerror("Error", msg)
                 return
 
-            # verify password
             user = self.users[username]
-            salt = user["salt"]
-            hashed_attempt = hash_password(password, salt)
-
-            if hashed_attempt != user["password_hash"]:
-                messagebox.showerror("Error", "Incorrect password.")
-                return
-
-            # load and decrypt private key
-            encrypted_priv = user["encrypted_private_key"]
-            priv_pem = c.decrypt_private_key(encrypted_priv, password)
-
-            # load public key
+            priv_pem = c.decrypt_private_key(user["encrypted_private_key"], password)
             public_key = base64.b64decode(user["public_key"])
-
-            # convert PEM (string) to bytes so ChatWindow can import it
             private_key = priv_pem.encode()
 
             # run chat
@@ -138,42 +239,16 @@ class LoginWindow:
             chat_root.mainloop()
             return
 
-        # -------------------------------------------------
-        # CREATE ACCOUNT MODE
-        # -------------------------------------------------
-        confirm = self.confirm_entry.get().strip()
+        else:  # create account
+            confirm = self.confirm_entry.get().strip()
+            success, msg = validate_create(self.users, username, password, confirm)
+            if not success:
+                messagebox.showerror("Error", msg)
+                return
 
-        if password != confirm:
-            messagebox.showerror("Error", "Passwords do not match.")
-            return
-
-        if username in self.users:
-            messagebox.showerror("Error", "This username is already taken.")
-            return
-
-        # generate salt + hashed password
-        salt = os.urandom(16).hex()
-        hashed = hash_password(password, salt)
-
-        # generate fresh RSA keys
-        priv_pem, pub_pem = c.generate_rsa_keys()
-
-        # encrypt private key using user's password
-        encrypted_priv = c.encrypt_private_key(priv_pem, password)
-
-        # store public key as plain PEM (base64 for JSON)
-        self.users[username] = {
-            "salt": salt,
-            "password_hash": hashed,
-            "encrypted_private_key": encrypted_priv,
-            "public_key": base64.b64encode(pub_pem.encode()).decode()
-        }
-
-        save_users(self.users)
-        messagebox.showinfo("Success", "Account created successfully!")
-
-        # return to login
-        self.switch_mode()
+            self.users = create_account(self.users, username, password)
+            messagebox.showinfo("Success", "Account created successfully!")
+            self.switch_mode()
 
 
 # ---------------------------------------------------------

@@ -3,6 +3,14 @@ import json
 import pytest
 import websockets
 import crypto.cipher as c
+from main import (
+    hash_password,
+    load_users,
+    save_users,
+    validate_login,
+    validate_create,
+    create_account,
+)
 
 SERVER_URI = "ws://localhost:8765"
 
@@ -30,7 +38,7 @@ def test_rsa_encrypt_decrypt():
     """
     bob_priv, bob_pub = c.generate_rsa_keys()
 
-    message = "Hello Bob! This is Alice."
+    message = "Hello Bob! This is name_test."
     encrypted = c.encrypt_rsa_message(message, bob_pub)
 
     assert encrypted != message  # ciphertext must differ
@@ -55,7 +63,7 @@ def test_aes_encrypt_decrypt():
     """
     key = c.generate_symmetric_key()
 
-    message = "Hello Bob! This is Alice."
+    message = "Hello Bob! This is name_test."
     encrypted = c.encrypt_symmetric_message(message, key)
     assert encrypted != message
 
@@ -209,23 +217,23 @@ def test_password_hash_variation():
 
 
 #######################################################################
-# TEST PART 5 — AES KEY EXCHANGE WORKFLOW (Alice → Bob)
+# TEST PART 5 — AES KEY EXCHANGE WORKFLOW (name_test → Bob)
 #######################################################################
 
 
 def test_aes_key_exchange_workflow():
     """
-    Simulates Alice encrypting an AES key with Bob's RSA public key.
+    Simulates name_test encrypting an AES key with Bob's RSA public key.
     Bob must be able to recover the AES key.
     """
     # Bob generates RSA keys
     bob_priv, bob_pub = c.generate_rsa_keys()
 
-    # Alice generates AES key
+    # name_test generates AES key
     aes_key = c.generate_symmetric_key()
     aes_key_b64 = base64.b64encode(aes_key).decode()
 
-    # Alice encrypts AES key with Bob's public key
+    # name_test encrypts AES key with Bob's public key
     encrypted_key = c.encrypt_rsa_message(aes_key_b64, bob_pub)
 
     # Bob decrypts
@@ -251,8 +259,6 @@ def test_message_round_trip():
 #######################################################################
 # TEST PART 6 — SERVER CONNECTIVITY (requires running server)
 #######################################################################
-
-
 @pytest.mark.asyncio
 async def test_server_register_and_get_peers():
     """
@@ -323,3 +329,144 @@ async def test_server_send_message():
 
         assert data_forward["type"] == "forward"
         assert decrypted_msg == "Test message"
+
+
+#######################################################################
+# TEST PART 7 — LOGIN WINDOW
+#######################################################################
+def test_hash_password_consistency():
+    """
+    Test that hashing the same password with the same salt produces
+    consistent results and correct hash length.
+    """
+    pw = "mypassword"
+    salt = "randomsalt"
+    h1 = hash_password(pw, salt)
+    h2 = hash_password(pw, salt)
+    assert h1 == h2
+    assert len(h1) == 64
+
+
+def test_save_and_load_users(tmp_path):
+    """
+    Test saving and loading users to a temporary JSON file.
+    Ensures that data is preserved correctly.
+    """
+    file_path = tmp_path / "tests_users.json"
+    users = {"name_test": {"salt": "1234", "password_hash": "abcd"}}
+
+    save_users(users, path=file_path)
+    loaded = load_users(path=file_path)
+    assert loaded == users
+
+
+# -------------------------
+# Login validation tests
+# -------------------------
+def test_validate_login_success():
+    """
+    Test a successful login with correct username and password.
+    """
+    users = {"name_test": {"salt": "1234", "password_hash": hash_password("pass", "1234")}}
+    success, msg = validate_login(users, "name_test", "pass")
+    assert success is True
+    assert msg == ""
+
+
+def test_validate_login_empty_fields():
+    """
+    Test login fails if username or password is empty.
+    """
+    users = {}
+    success, msg = validate_login(users, "", "")
+    assert success is False
+    assert "Enter username" in msg
+
+
+def test_validate_login_unknown_user():
+    """
+    Test login fails if username does not exist.
+    """
+    users = {"bob": {}}
+    success, msg = validate_login(users, "name_test", "pass")
+    assert success is False
+    assert "Unknown user" in msg
+
+
+def test_validate_login_wrong_password():
+    """
+    Test login fails if password is incorrect.
+    """
+    users = {"name_test": {"salt": "1234", "password_hash": hash_password("correct", "1234")}}
+    success, msg = validate_login(users, "name_test", "wrong")
+    assert success is False
+    assert "Incorrect password" in msg
+
+
+# -------------------------
+# Create account validation tests
+# -------------------------
+def test_validate_create_success():
+    """
+    Test that account creation validation succeeds with valid input.
+    """
+    users = {}
+    success, msg = validate_create(users, "name_test", "pass", "pass")
+    assert success is True
+    assert msg == ""
+
+
+def test_validate_create_password_mismatch():
+    """
+    Test that account creation fails if passwords do not match.
+    """
+    users = {}
+    success, msg = validate_create(users, "name_test", "pass1", "pass2")
+    assert success is False
+    assert "Passwords do not match" in msg
+
+
+def test_validate_create_username_taken():
+    """
+    Test that account creation fails if username already exists.
+    """
+    users = {"name_test": {}}
+    success, msg = validate_create(users, "name_test", "pass", "pass")
+    assert success is False
+    assert "already taken" in msg
+
+
+def test_validate_create_empty_fields():
+    """
+    Test that account creation fails if username or password is empty.
+    """
+    users = {}
+    success, msg = validate_create(users, "", "", "")
+    assert success is False
+    assert "Enter username" in msg
+
+
+# -------------------------
+# Create account logic test
+# -------------------------
+def test_create_account_adds_user(tmp_path, monkeypatch):
+    """
+    Test that create_account properly adds a new user with hashed password,
+    encrypted private key, and base64-encoded public key.
+    """
+    users = {}
+    file_path = tmp_path / "tests_users.json"
+
+    # Patch crypto.cipher functions to return fixed values
+    monkeypatch.setattr("crypto.cipher.generate_rsa_keys", lambda: ("private_key", "public_key"))
+    monkeypatch.setattr("crypto.cipher.encrypt_private_key", lambda priv, pw: f"encrypted_{priv}")
+
+    updated_users = create_account(users, "name_test", "pass", path=file_path)
+    assert "name_test" in updated_users
+    user = updated_users["name_test"]
+
+    assert user["salt"] is not None
+    assert user["password_hash"] == hash_password("pass", user["salt"])
+    assert user["encrypted_private_key"] == "encrypted_private_key"
+    decoded_pub = base64.b64decode(user["public_key"]).decode()
+    assert decoded_pub == "public_key"
