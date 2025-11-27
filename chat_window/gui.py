@@ -104,6 +104,9 @@ class ChatWindow:
 
     # ---------------------- UI BUILD HELPERS ----------------------
     def _build_ui(self):
+        """
+        Build the user interface for the chat window.
+        """
         style = ttk.Style(self.master)
         try:
             style.theme_use("clam")
@@ -195,6 +198,9 @@ class ChatWindow:
         self._make_context_menu()
 
     def _make_context_menu(self):
+        """
+        Make the right-click context menu
+        """
         # simple right-click menu (uses tk menu)
         self._ctx = tk.Menu(self.master, tearoff=0)
         self._ctx.add_command(label="Copy", command=self._ctx_copy)
@@ -203,6 +209,9 @@ class ChatWindow:
         self.chat_display.bind("<Button-3>", self._show_context_menu)
 
     def _ctx_copy(self):
+        """
+        Copy selected text
+        """
         try:
             txt = self.chat_display.get(tk.SEL_FIRST, tk.SEL_LAST)
             self.master.clipboard_clear()
@@ -211,17 +220,26 @@ class ChatWindow:
             pass
 
     def _show_context_menu(self, event):
+        """
+        Show the context menu
+        """
         try:
             self._ctx.tk_popup(event.x_root, event.y_root)
         finally:
             self._ctx.grab_release()
 
     def _clear_chat(self):
+        """
+        Clear the chat window
+        """
         self.chat_display.config(state="normal")
         self.chat_display.delete("1.0", tk.END)
         self.chat_display.config(state="disabled")
 
     def _update_send_state(self):
+        """
+        Update send button state to enabled/disabled send button
+        """
         t = self.entry.get().strip()
         if t:
             self.send_button.state(["!disabled"])
@@ -382,7 +400,7 @@ class ChatWindow:
 
     def save_messages(self):
         """
-        Save chat history in a file encrypted with user's RSA public key.
+        Save chat history in an encrypted file.
         """
         # --- Ensure history folder exists ---
         history_dir = "history"
@@ -448,6 +466,9 @@ class ChatWindow:
         logger.info(f"Saved encrypted history to {filename}")
 
     def load_history_from_file(self, filename):
+        """
+        Load history from encrypted file, decipher and display it.
+        """
         with open(filename, "r") as f:
             package = json.loads(f.read())
 
@@ -487,6 +508,9 @@ class ChatWindow:
         logger.info("[HISTORY] Successfully loaded and rendered encrypted history.")
 
     def load_history_dialog(self):
+        """
+        Helper function to open a file dialog so the user can select a history file.
+        """
         filepath = filedialog.askopenfilename(
             title="Select Encrypted History File",
             filetypes=[("Encrypted chat history", "*.txt"), ("All files", "*.*")]
