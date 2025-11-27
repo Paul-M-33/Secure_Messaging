@@ -97,7 +97,7 @@ async def handler(ws):
         pass
 
     finally:
-        if name and name in clients and clients[name] is ws:
+        if name and name in clients and clients[name]["ws"] is ws:
             del clients[name]
             logger.info(f"[DISCONNECT] {name}")
             await broadcast_peers()
