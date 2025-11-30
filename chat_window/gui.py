@@ -66,7 +66,7 @@ class LoginWindow:
         self.password_entry = tk.Entry(master, width=30, show="*")
         self.password_entry.pack(pady=5)
 
-        # confirm password (hidden except in create mode)
+        # confirm password
         self.confirm_label = tk.Label(master, text="Confirm password:")
         self.confirm_entry = tk.Entry(master, width=30, show="*")
 
@@ -93,8 +93,17 @@ class LoginWindow:
             self.submit_button.config(text="Create account")
             self.switch_link.config(text="Back to login")
 
+            # remove widgets to re-order them
+            self.submit_button.pack_forget()
+            self.switch_link.pack_forget()
+
+            # show confirm password fields
             self.confirm_label.pack()
             self.confirm_entry.pack(pady=5)
+
+            # re-pack button + link with correct spacing
+            self.submit_button.pack(pady=10)
+            self.switch_link.pack()
 
         else:
             # switch to login
