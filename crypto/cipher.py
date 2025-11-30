@@ -3,6 +3,7 @@
 import base64
 import logging
 import json
+import hashlib
 from Cryptodome.PublicKey import RSA
 from Cryptodome.Cipher import PKCS1_OAEP, AES
 from Cryptodome.Random import get_random_bytes
@@ -252,3 +253,20 @@ def decrypt_private_key(encrypted_blob: str, password: str) -> str:
     private_pem = cipher.decrypt_and_verify(ciphertext, tag)
 
     return private_pem.decode()
+
+
+# ============================================================
+# HASHING
+# ============================================================
+def hash_password(password, salt) -> str:
+    """
+    Generate a SHA-256 hash of the password concatenated with the salt.
+
+    Args:
+        password (str): The user's password.
+        salt (str): A random salt.
+
+    Returns:
+        str: Hexadecimal string of the hashed password.
+    """
+    return hashlib.sha256((password + salt).encode()).hexdigest()
