@@ -11,7 +11,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Store connected clients: dict of : name → dict of : (websocket, public key)
+# Store connected clients: dict of : name → dict of : (websocket, public RSA key)
 clients = {}
 
 

@@ -3,18 +3,13 @@ import json
 import pytest
 import websockets
 import crypto.cipher as c
-from main import (
-    hash_password,
-    load_users,
-    save_users,
-    validate_login,
-    validate_create,
-    create_account,
-)
+from chat_window.gui import LoginWindow
+import tkinter as tk
 
 SERVER_URI = "ws://localhost:8765"
 
-
+root = tk.Tk()
+root.withdraw()
 #######################################################################
 # TEST PART 1 — CRYPTOGRAPHIC PRIMITIVES
 #######################################################################
@@ -193,13 +188,11 @@ def test_password_hash_stability():
     """
     Same password + same salt must yield identical hashes.
     """
-    from main import hash_password
-
     pwd = "UserPassword"
     salt = "abcdef123456"
 
-    h1 = hash_password(pwd, salt)
-    h2 = hash_password(pwd, salt)
+    h1 = c.hash_password(pwd, salt)
+    h2 = c.hash_password(pwd, salt)
     assert h1 == h2
 
 
@@ -207,13 +200,11 @@ def test_password_hash_variation():
     """
     Same password with different salts must produce different hashes.
     """
-    from main import hash_password
-
     pwd = "UserPassword"
     salt1 = "abcdef"
     salt2 = "123456"
 
-    assert hash_password(pwd, salt1) != hash_password(pwd, salt2)
+    assert c.hash_password(pwd, salt1) != c.hash_password(pwd, salt2)
 
 
 #######################################################################
@@ -341,8 +332,8 @@ def test_hash_password_consistency():
     """
     pw = "mypassword"
     salt = "randomsalt"
-    h1 = hash_password(pw, salt)
-    h2 = hash_password(pw, salt)
+    h1 = c.hash_password(pw, salt)
+    h2 = c.hash_password(pw, salt)
     assert h1 == h2
     assert len(h1) == 64
 
@@ -355,8 +346,10 @@ def test_save_and_load_users(tmp_path):
     file_path = tmp_path / "tests_users.json"
     users = {"name_test": {"salt": "1234", "password_hash": "abcd"}}
 
-    save_users(users, path=file_path)
-    loaded = load_users(path=file_path)
+    lw = LoginWindow(root)
+
+    lw.save_users(users=users, path=file_path)
+    loaded = lw.load_users(path=file_path)
     assert loaded == users
 
 
@@ -367,8 +360,9 @@ def test_validate_login_success():
     """
     Test a successful login with correct username and password.
     """
-    users = {"name_test": {"salt": "1234", "password_hash": hash_password("pass", "1234")}}
-    success, msg = validate_login(users, "name_test", "pass")
+    lw = LoginWindow(root)
+    users = {"name_test": {"salt": "1234", "password_hash": c.hash_password("pass", "1234")}}
+    success, msg = lw.validate_login(users, "name_test", password="pass")
     assert success is True
     assert msg == ""
 
@@ -377,8 +371,9 @@ def test_validate_login_empty_fields():
     """
     Test login fails if username or password is empty.
     """
+    lw = LoginWindow(root)
     users = {}
-    success, msg = validate_login(users, "", "")
+    success, msg = lw.validate_login(users, "", "")
     assert success is False
     assert "Enter username" in msg
 
@@ -387,8 +382,9 @@ def test_validate_login_unknown_user():
     """
     Test login fails if username does not exist.
     """
+    lw = LoginWindow(root)
     users = {"bob": {}}
-    success, msg = validate_login(users, "name_test", "pass")
+    success, msg = lw.validate_login(users, "name_test", "pass")
     assert success is False
     assert "Unknown user" in msg
 
@@ -397,8 +393,9 @@ def test_validate_login_wrong_password():
     """
     Test login fails if password is incorrect.
     """
-    users = {"name_test": {"salt": "1234", "password_hash": hash_password("correct", "1234")}}
-    success, msg = validate_login(users, "name_test", "wrong")
+    lw = LoginWindow(root)
+    users = {"name_test": {"salt": "1234", "password_hash": c.hash_password("correct", "1234")}}
+    success, msg = lw.validate_login(users, "name_test", "wrong")
     assert success is False
     assert "Incorrect password" in msg
 
@@ -410,8 +407,9 @@ def test_validate_create_success():
     """
     Test that account creation validation succeeds with valid input.
     """
+    lw = LoginWindow(root)
     users = {}
-    success, msg = validate_create(users, "name_test", "pass", "pass")
+    success, msg = lw.validate_create(users, "name_test", "pass", "pass")
     assert success is True
     assert msg == ""
 
@@ -420,8 +418,9 @@ def test_validate_create_password_mismatch():
     """
     Test that account creation fails if passwords do not match.
     """
+    lw = LoginWindow(root)
     users = {}
-    success, msg = validate_create(users, "name_test", "pass1", "pass2")
+    success, msg = lw.validate_create(users, "name_test", "pass1", "pass2")
     assert success is False
     assert "Passwords do not match" in msg
 
@@ -430,8 +429,9 @@ def test_validate_create_username_taken():
     """
     Test that account creation fails if username already exists.
     """
+    lw = LoginWindow(root)
     users = {"name_test": {}}
-    success, msg = validate_create(users, "name_test", "pass", "pass")
+    success, msg = lw.validate_create(users, "name_test", "pass", "pass")
     assert success is False
     assert "already taken" in msg
 
@@ -440,8 +440,9 @@ def test_validate_create_empty_fields():
     """
     Test that account creation fails if username or password is empty.
     """
+    lw = LoginWindow(root)
     users = {}
-    success, msg = validate_create(users, "", "", "")
+    success, msg = lw.validate_create(users, "", "", "")
     assert success is False
     assert "Enter username" in msg
 
@@ -461,12 +462,14 @@ def test_create_account_adds_user(tmp_path, monkeypatch):
     monkeypatch.setattr("crypto.cipher.generate_rsa_keys", lambda: ("private_key", "public_key"))
     monkeypatch.setattr("crypto.cipher.encrypt_private_key", lambda priv, pw: f"encrypted_{priv}")
 
-    updated_users = create_account(users, "name_test", "pass", path=file_path)
+    lw = LoginWindow(root)
+
+    updated_users = lw.create_account(users, "name_test", password="pass", path=file_path)
     assert "name_test" in updated_users
     user = updated_users["name_test"]
 
     assert user["salt"] is not None
-    assert user["password_hash"] == hash_password("pass", user["salt"])
+    assert user["password_hash"] == c.hash_password("pass", user["salt"])
     assert user["encrypted_private_key"] == "encrypted_private_key"
     decoded_pub = base64.b64decode(user["public_key"]).decode()
     assert decoded_pub == "public_key"
